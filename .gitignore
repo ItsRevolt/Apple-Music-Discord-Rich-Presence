@@ -1,0 +1,7 @@
+
+/.kiro
+/daemon/.zig-cache
+/extension/node_modules
+/extension/dist
+/daemon/zig-out
+/.vscode

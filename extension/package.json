@@ -1,0 +1,16 @@
+{
+  "name": "applemusic-rich-presence-ext",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "bun build --target=browser --outdir=dist src/content.ts src/background.ts src/injected.ts src/utils.ts --minify && cp manifest.json dist/manifest.json",
+    "dev": "bun build --target=browser --outdir=dist --watch src/content.ts src/background.ts src/injected.ts src/utils.ts & cp manifest.json dist/manifest.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@types/webextension-polyfill": "^0.12.3",
+    "webextension-polyfill": "^0.12.0"
+  }
+}
