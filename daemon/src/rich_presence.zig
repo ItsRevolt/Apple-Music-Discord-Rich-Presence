@@ -93,7 +93,7 @@ pub const RichPresenceClient = struct {
         c.Discord_RunCallbacks();
     }
 
-    fn clearRichPresence(self: *RichPresenceClient) void {
+    pub fn clearRichPresence(self: *RichPresenceClient) void {
         c.Discord_Client_ClearRichPresence(&self.client);
     }
 };
