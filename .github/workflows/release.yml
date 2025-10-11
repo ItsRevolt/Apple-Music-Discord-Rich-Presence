@@ -1,0 +1,218 @@
+name: Cross-Platform Zig + Bun Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+env:
+  PROJECT_NAME: Apple-Music-Discord-Rich-Presence
+
+jobs:
+  # --------------------------------
+  # Validate VERSION file
+  # --------------------------------
+  validate-version:
+    name: Validate VERSION
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.read_version.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version file
+        id: read_version
+        run: |
+          if [ ! -f VERSION ]; then
+            echo "VERSION file missing!"
+            exit 1
+          fi
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          if [ -z "$VERSION" ]; then
+            echo "VERSION file empty!"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check latest release tag
+        id: latest
+        run: |
+          LATEST=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || echo "")
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare VERSION with latest tag
+        run: |
+          if [ "${{ steps.latest.outputs.latest }}" = "v${{ steps.read_version.outputs.version }}" ]; then
+            echo "❌ VERSION ${{ steps.read_version.outputs.version }} already released."
+            exit 1
+          else
+            echo "✅ VERSION ${{ steps.read_version.outputs.version }} is new."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --------------------------------
+  # Build Zig daemon for all targets
+  # --------------------------------
+  build-zig:
+    name: Build Zig Daemon (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: validate-version
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+            zig_target: x86_64-linux-gnu
+            ext: tar.gz
+          - target: macos-x64
+            zig_target: x86_64-macos
+            ext: tar.gz
+          - target: macos-arm64
+            zig_target: aarch64-macos
+            ext: tar.gz
+          - target: windows-x64
+            zig_target: x86_64-windows-gnu
+            ext: zip
+
+    defaults:
+      run:
+        working-directory: ./daemon
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: master
+
+      - name: Build daemon
+        run: |
+          zig build -Drelease-fast=true -Dtarget=${{ matrix.zig_target }}
+          mkdir -p ../dist
+          cp zig-out/bin/* ../dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}
+
+      - name: Compress daemon
+        run: |
+          cd ../dist
+          if [[ "${{ matrix.ext }}" == "zip" ]]; then
+            zip -r ${{ env.PROJECT_NAME }}-${{ matrix.target }}.zip ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+            rm -rf ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+          else
+            tar -czf ${{ env.PROJECT_NAME }}-${{ matrix.target }}.tar.gz ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+            rm -rf ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+          fi
+
+      - name: Upload daemon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ matrix.target }}
+          path: dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}.*
+
+  # --------------------------------
+  # Build Bun TypeScript extension
+  # --------------------------------
+  build-extension:
+    name: Build Bun Extension
+    runs-on: ubuntu-latest
+    needs: validate-version
+    defaults:
+      run:
+        working-directory: ./extension
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies & build
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          mkdir -p ../dist/extension
+          cp -r dist/* ../dist/extension/
+
+      - name: Compress extension
+        run: |
+          cd ../dist
+          tar -czf extension.tar.gz extension
+          rm -rf extension
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: dist/extension.tar.gz
+
+  # --------------------------------
+  # Release job
+  # --------------------------------
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-version, build-zig, build-extension]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          find . -type f -exec sha256sum {} \; > SHA256SUMS.txt
+
+      - name: Create Git tag
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.validate-version.outputs.version }}
+          name: Release v${{ needs.validate-version.outputs.version }}
+          body: |
+            🚀 **Cross-platform release v${{ needs.validate-version.outputs.version }}**
+
+            ### Daemon builds:
+            - ${{ env.PROJECT_NAME }}-linux-x64.tar.gz
+            - ${{ env.PROJECT_NAME }}-macos-x64.tar.gz
+            - ${{ env.PROJECT_NAME }}-macos-arm64.tar.gz
+            - ${{ env.PROJECT_NAME }}-windows-x64.zip
+
+            ### Extension:
+            - extension.tar.gz
+
+            ### Checksums:
+            - SHA256SUMS.txt
+          files: |
+            dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

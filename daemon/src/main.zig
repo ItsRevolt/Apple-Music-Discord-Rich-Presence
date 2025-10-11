@@ -16,7 +16,6 @@ pub fn main() !void {
     const server_thread = try std.Thread.spawn(.{}, runWebSocketServer, .{ allocator, &rp_client });
     defer server_thread.join();
 
-    // Discord SDK callback loop (10ms as recommended by Discord)
     while (true) {
         rp_client.runCallbacks();
         std.Thread.sleep(10 * std.time.ns_per_ms);
