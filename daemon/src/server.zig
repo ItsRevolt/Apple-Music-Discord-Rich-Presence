@@ -35,9 +35,8 @@ pub const Handler = struct {
         self.app.rich_presence_client.applyMessage(parsed.value);
     }
 
-    pub fn close(self: *Handler) void {
+    pub fn close(_: *Handler) void {
         std.log.info("🔌 Client disconnected\n", .{});
-        self.app.rich_presence_client.clearRichPresence();
     }
 };
 

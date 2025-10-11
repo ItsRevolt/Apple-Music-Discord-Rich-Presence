@@ -35,6 +35,20 @@ window.addEventListener('MusicKitDataEvent', (event: Event) => {
   }
 });
 
+// Send STOP message when page is about to unload
+window.addEventListener('beforeunload', () => {
+  sendToBackground({
+    title: null,
+    artist: null,
+    album: null,
+    artworkUrl: null,
+    durationSec: null,
+    positionSec: null,
+    isPlaying: false,
+    url: null,
+  });
+});
+
 injectMusicKitScript();
 
 console.log("[CONTENT] Now Playing content script initialized.");
