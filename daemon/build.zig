@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
 
     // Windows (x86_64)
     if (target.result.os.tag == .windows and target.result.cpu.arch == .x86_64) {
-        exe.addObjectFile(b.path("deps/discord_partner_sdk/lib/windows-x86_64/discord_partner_sdk.dll.lib"));
+        exe.addObjectFile(b.path("deps/discord_partner_sdk/lib/windows-x86_64/discord_partner_sdk.lib"));
         b.installFile(
             "deps/discord_partner_sdk/lib/windows-x86_64/discord_partner_sdk.dll",
             "bin/discord_partner_sdk.dll",

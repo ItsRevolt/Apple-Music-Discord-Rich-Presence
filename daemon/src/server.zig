@@ -27,7 +27,7 @@ pub const Handler = struct {
         std.log.info("📨 Received: {s}\n", .{data});
 
         var parsed = std.json.parseFromSlice(rich_presence.WebSocketMessage, self.app.allocator, data, .{}) catch |err| {
-            std.log.err("❌ Failed to parse JSON: {}\n", .{err});
+            std.log.err("❌ Failed to parse JSON: {any}\n", .{err});
             return;
         };
         defer parsed.deinit();

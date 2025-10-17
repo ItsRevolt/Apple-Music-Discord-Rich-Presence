@@ -1,5 +1,3 @@
-//MusicKit has been very unreliable when sending events.
-//This is why the code seems hacky/not clean :(
 (function () {
     console.log("[INJECTED] Script is running in the main world.");
 
@@ -10,78 +8,64 @@
         addEventListener(event: string, handler: (event?: any) => void): void;
     }
 
-    // State tracking to prevent duplicate events
     const state = {
         lastPosition: 0,
         musicKit: null as MusicKitInstance | null,
         currentTrackId: null as string | null,
         currentIsPlaying: false,
-        lastSeekAt: 0,
-        lastTrackChangeAt: 0
+        pendingUpdate: null as number | null
     };
 
-    function extractMusicKitData(nowPlayingItem?: any) {
-        const item = nowPlayingItem || state.musicKit?.nowPlayingItem;
-
-        const attrs = item?.attributes || undefined;
-        const title = attrs?.name ?? null;
-        const artist = attrs?.artistName ?? null;
-        const album = attrs?.albumName ?? null;
+    function extractMusicKitData() {
+        const item = state.musicKit?.nowPlayingItem;
+        const attrs = item?.attributes;
 
         const artworkTemplate = attrs?.artwork?.url as string | undefined;
-        const artworkUrl = artworkTemplate
-            ? artworkTemplate.replace('{w}', '300').replace('{h}', '300')
-            : null;
+        const artworkUrl = artworkTemplate?.replace('{w}', '300').replace('{h}', '300') ?? null;
 
-        const durationMillis = typeof attrs?.durationInMillis === 'number' ? attrs!.durationInMillis : null;
-        const durationSec = durationMillis != null ? Math.round(durationMillis / 1000) : null;
-        const positionSec = typeof state.musicKit?.currentPlaybackTime === 'number' ? state.musicKit!.currentPlaybackTime : null;
+        const durationMillis = attrs?.durationInMillis;
+        const durationSec = typeof durationMillis === 'number' ? Math.round(durationMillis / 1000) : null;
 
         return {
-            title,
-            artist,
-            album,
+            title: attrs?.name ?? null,
+            artist: attrs?.artistName ?? null,
+            album: attrs?.albumName ?? null,
             artworkUrl,
             durationSec,
-            positionSec,
-            isPlaying: !!(state.musicKit?.isPlaying),
+            positionSec: state.musicKit?.currentPlaybackTime ?? null,
+            isPlaying: state.musicKit?.isPlaying ?? false,
             url: window.location.href
         };
     }
 
-    function sendDataToContentScript(data?: any, source?: string) {
-        const musicData = data || extractMusicKitData();
-        const hasMeta = !!(musicData.title && musicData.artist);
-        const isPlaying = !!musicData.isPlaying;
-
-        if (!hasMeta) return;
-
-        const trackId = musicData.title + '|' + musicData.artist;
+    function emitUpdate(musicData: any) {
+        const trackId = `${musicData.title}|${musicData.artist}`;
         const trackChanged = trackId !== state.currentTrackId;
-        const playStateChanged = isPlaying !== state.currentIsPlaying;
+        const playStateChanged = musicData.isPlaying !== state.currentIsPlaying;
 
-        if (trackChanged) {
+        if (trackChanged || playStateChanged) {
             state.currentTrackId = trackId;
-            state.currentIsPlaying = isPlaying;
+            state.currentIsPlaying = musicData.isPlaying;
             window.dispatchEvent(new CustomEvent('MusicKitDataEvent', { detail: musicData }));
-            return;
+        }
+    }
+
+    function scheduleUpdate(immediate = false) {
+        if (state.pendingUpdate) {
+            clearTimeout(state.pendingUpdate);
+            state.pendingUpdate = null;
         }
 
-        if (source === 'scrubbing') {
-            window.dispatchEvent(new CustomEvent('MusicKitDataEvent', { detail: musicData }));
-            return;
-        }
+        const musicData = extractMusicKitData();
+        if (!musicData.title || !musicData.artist) return;
 
-        if (playStateChanged) {
-            if (!isPlaying) {
-                const now = Date.now();
-                const recentTrackChange = now - state.lastTrackChangeAt < 2000;
-                const recentSeek = now - state.lastSeekAt < 1000;
-                if (recentTrackChange || recentSeek) return;
-            }
-
-            state.currentIsPlaying = isPlaying;
-            window.dispatchEvent(new CustomEvent('MusicKitDataEvent', { detail: musicData }));
+        if (immediate) {
+            emitUpdate(musicData);
+        } else {
+            state.pendingUpdate = setTimeout(() => {
+                state.pendingUpdate = null;
+                emitUpdate(musicData);
+            }, 100);
         }
     }
 
@@ -91,46 +75,29 @@
 
         // Only send update for significant position jumps (manual scrubbing)
         if (positionDifference > 1) {
-            state.lastSeekAt = Date.now();
             const data = extractMusicKitData();
             data.positionSec = currentPosition;
-            // Force NOW PLAYING on scrubbing (MusicKit may send pause if position not loaded)
-            data.isPlaying = true;
-            sendDataToContentScript(data, 'scrubbing');
+            data.isPlaying = true; // Force playing state on scrubbing
+            emitUpdate(data);
         }
 
         state.lastPosition = currentPosition;
     }
 
     function handleTrackChange() {
-        state.lastTrackChangeAt = Date.now();
-        const data = extractMusicKitData();
-        // Force NOW PLAYING on track change
-        data.isPlaying = true;
-        sendDataToContentScript(data, 'trackChange');
+        scheduleUpdate();
     }
 
-    function handlePlaybackStateChange(event?: any) {
-        const mk: any = (window as any).MusicKit;
-        const states = mk?.PlaybackStates || {};
-        const eventData = event || {};
-        const newState = eventData.state;
+    function handlePlaybackStateChange(event: any) {
+        const states = (window as any).MusicKit?.PlaybackStates;
+        if (!states) return;
 
-        if (newState === states.playing) {
-            const data = extractMusicKitData();
-            data.isPlaying = true;
-            sendDataToContentScript(data, 'playbackState');
-            return;
+        const newState = event?.state;
+
+        // Only handle meaningful states, ignore transitional ones
+        if (newState === states.playing || newState === states.paused || newState === states.stopped) {
+            scheduleUpdate();
         }
-
-        if (newState === states.paused || newState === states.stopped) {
-            const data = extractMusicKitData();
-            data.isPlaying = false;
-            sendDataToContentScript(data, 'playbackState');
-            return;
-        }
-
-        // Ignore transitional states (loading, waiting, stalled, seeking, ended)
     }
 
     function setupMusicKitListeners() {
@@ -146,24 +113,17 @@
             state.musicKit.addEventListener('playbackStateDidChange', handlePlaybackStateChange);
             state.musicKit.addEventListener('playbackTimeDidChange', handlePlaybackTimeChange);
 
-            state.lastPosition = state.musicKit?.currentPlaybackTime || 0;
-
-            const initialData = extractMusicKitData();
-            if (initialData.isPlaying) {
-                sendDataToContentScript(initialData, 'init');
-            }
-
+            state.lastPosition = state.musicKit.currentPlaybackTime || 0;
+            scheduleUpdate(true);
         } catch (error) {
             console.log("[INJECTED] Error setting up MusicKit listeners:", error);
             setTimeout(setupMusicKitListeners, 2000);
         }
     }
 
-    // Wait for MusicKit to be available and set up listeners
     if ((window as any).MusicKit) {
         setupMusicKitListeners();
     } else {
-        // Wait for MusicKit to load
         const checkForMusicKit = setInterval(() => {
             if ((window as any).MusicKit) {
                 clearInterval(checkForMusicKit);
